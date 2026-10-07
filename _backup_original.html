@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>吃豆人 Pac-Man</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: #080808;
+    color: #fff;
+    font-family: Arial, "Microsoft JhengHei", sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+  .game-wrap {
+    width: min(92vw, 720px);
+    text-align: center;
+  }
+  h1 {
+    color: #ffd900;
+    margin: 0 0 10px;
+    letter-spacing: 3px;
+  }
+  .hud {
+    display: flex;
+    justify-content: space-between;
+    margin: 0 auto 10px;
+    max-width: 560px;
+    font-size: 18px;
+  }
+  canvas {
+    width: min(92vw, 560px);
+    height: auto;
+    background: #000;
+    border: 3px solid #183dff;
+    border-radius: 8px;
+    display: block;
+    margin: auto;
+    image-rendering: pixelated;
+  }
+  .hint {
+    margin-top: 12px;
+    color: #ccc;
+    font-size: 14px;
+  }
+  button {
+    margin-top: 10px;
+    padding: 9px 20px;
+    border: 0;
+    border-radius: 6px;
+    background: #ffd900;
+    color: #111;
+    font-weight: bold;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<div class="game-wrap">
+  <h1>● PAC-MAN ●</h1>
+  <div class="hud">
+    <span>分數：<b id="score">0</b></span>
+    <span>生命：<b id="lives">3</b></span>
+  </div>
+  <canvas id="game" width="560" height="620"></canvas>
+  <div class="hint">使用 ↑ ↓ ← → 控制吃豆人，吃掉所有豆子即可過關！</div>
+  <button id="restart">重新開始</button>
+</div>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const scoreEl = document.getElementById("score");
+const livesEl = document.getElementById("lives");
+const restartBtn = document.getElementById("restart");
+
+const TILE = 20;
+
+// # = 牆, . = 豆子, o = 能量豆, 空白 = 道路
+const MAP = [
+"############################",
+"#............##............#",
+"#.####.#####.##.#####.####.#",
+"#o####.#####.##.#####.####o#",
+"#.####.#####.##.#####.####.#",
+"#..........................#",
+"#.####.##.########.##.####.#",
+"#......##....##....##......#",
+"######.##### ## #####.######",
+"     #.##### ## #####.#     ",
+"     #.##          ##.#     ",
+"######.## ###--### ##.######",
+"     #.   #      #   .#     ",
+"     #.## #      # ##.#     ",
+"######.## ######## ##.######",
+"#............##............#",
+"#.####.#####.##.#####.####.#",
+"#o..##................##..o#",
+"###.##.##.########.##.##.###",
+"#......##....##....##......#",
+"#.##########.##.##########.#",
+"#..........................#",
+"############################"
+];
+
+// Normalize rows to 28 columns.
+const rows = MAP.length;
+const cols = 28;
+const grid = MAP.map(row => row.padEnd(cols, " ").slice(0, cols).split(""));
+
+let score = 0;
+let lives = 3;
+let gameOver = false;
+let win = false;
+let lastTime = 0;
+let accumulator = 0;
+const STEP = 115;
+const GHOST_MOVE_EVERY = 2;
+let ghostTick = 0;
+
+const pac = {
+  x: 13, y: 17, dir: {x:0,y:0}, next: {x:0,y:0},
+  mouth: 0
+};
+
+const ghosts = [
+  {x:13, y:12, color:"#ff3b3b", dir:{x:1,y:0}, name:"Blinky"},
+  {x:14, y:12, color:"#ff9de2", dir:{x:-1,y:0}, name:"Pinky"},
+  {x:12, y:12, color:"#38e8ff", dir:{x:0,y:-1}, name:"Inky"},
+  {x:15, y:12, color:"#ff9d32", dir:{x:0,y:1}, name:"Clyde"}
+];
+
+function resetPositions() {
+  pac.x = 13; pac.y = 17;
+  pac.dir = {x:0,y:0};
+  pac.next = {x:0,y:0};
+  const starts = [[13,12],[14,12],[12,12],[15,12]];
+  ghosts.forEach((g,i) => {
+    g.x = starts[i][0];
+    g.y = starts[i][1];
+    g.dir = i % 2 ? {x:-1,y:0} : {x:1,y:0};
+  });
+}
+
+function isWall(x,y) {
+  if (y < 0 || y >= rows || x < 0 || x >= cols) return true;
+  return grid[y][x] === "#";
+}
+
+function isOpen(x,y) {
+  if (y < 0 || y >= rows) return false;
+  if (x < 0 || x >= cols) return true; // tunnel wrap
+  return grid[y][x] !== "#";
+}
+
+function moveEntity(e, dir) {
+  let nx = e.x + dir.x, ny = e.y + dir.y;
+  if (nx < 0) nx = cols - 1;
+  if (nx >= cols) nx = 0;
+  if (!isOpen(nx,ny)) return false;
+  e.x = nx; e.y = ny;
+  return true;
+}
+
+function eat() {
+  const cell = grid[pac.y][pac.x];
+  if (cell === ".") {
+    grid[pac.y][pac.x] = " ";
+    score += 10;
+  } else if (cell === "o") {
+    grid[pac.y][pac.x] = " ";
+    score += 50;
+  }
+  scoreEl.textContent = score;
+
+  let remaining = 0;
+  for (const row of grid)
+    for (const c of row)
+      if (c === "." || c === "o") remaining++;
+  if (remaining === 0) {
+    win = true;
+    gameOver = true;
+  }
+}
+
+function validDirs(g) {
+  const dirs = [
+    {x:1,y:0},{x:-1,y:0},{x:0,y:1},{x:0,y:-1}
+  ];
+  return dirs.filter(d => isOpen(g.x+d.x, g.y+d.y));
+}
+
+function chooseGhostDirection(g) {
+  const dirs = validDirs(g);
+  if (!dirs.length) return;
+
+  // 避免立刻掉頭，除非沒有其他路。
+  const reverse = {x:-g.dir.x, y:-g.dir.y};
+  let choices = dirs.filter(d => !(d.x === reverse.x && d.y === reverse.y));
+  if (!choices.length) choices = dirs;
+
+  // 簡單 AI：大多數時間朝吃豆人較近的方向走，
+  // 偶爾隨機選擇，讓追擊不會完全固定。
+  if (Math.random() < 0.78) {
+    choices.sort((a,b) => {
+      const da = Math.abs((g.x+a.x)-pac.x) + Math.abs((g.y+a.y)-pac.y);
+      const db = Math.abs((g.x+b.x)-pac.x) + Math.abs((g.y+b.y)-pac.y);
+      return da - db;
+    });
+    g.dir = choices[0];
+  } else {
+    g.dir = choices[Math.floor(Math.random()*choices.length)];
+  }
+}
+
+function movePac() {
+  if (pac.next.x || pac.next.y) {
+    if (isOpen(pac.x+pac.next.x, pac.y+pac.next.y)) {
+      pac.dir = {...pac.next};
+    }
+  }
+  if (pac.dir.x || pac.dir.y) moveEntity(pac, pac.dir);
+  eat();
+}
+
+function moveGhosts() {
+  ghosts.forEach(g => {
+    const atIntersection =
+      validDirs(g).length >= 3 ||
+      !isOpen(g.x+g.dir.x, g.y+g.dir.y);
+    if (atIntersection) chooseGhostDirection(g);
+    moveEntity(g, g.dir);
+  });
+}
+
+function collisionCheck() {
+  for (const g of ghosts) {
+    if (g.x === pac.x && g.y === pac.y) {
+      lives--;
+      livesEl.textContent = lives;
+      if (lives <= 0) {
+        gameOver = true;
+      } else {
+        resetPositions();
+      }
+      return;
+    }
+  }
+}
+
+function drawMaze() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  for (let y=0;y<rows;y++) {
+    for (let x=0;x<cols;x++) {
+      const cell = grid[y][x];
+      if (cell === "#") {
+        ctx.fillStyle = "#101d9b";
+        ctx.fillRect(x*TILE+2,y*TILE+2,TILE-4,TILE-4);
+        ctx.strokeStyle = "#2d50ff";
+        ctx.strokeRect(x*TILE+4,y*TILE+4,TILE-8,TILE-8);
+      } else if (cell === "." || cell === "o") {
+        ctx.fillStyle = "#ffe9a8";
+        const r = cell === "o" ? 5 : 2.2;
+        ctx.beginPath();
+        ctx.arc(x*TILE+TILE/2,y*TILE+TILE/2,r,0,Math.PI*2);
+        ctx.fill();
+      }
+    }
+  }
+}
+
+function drawPac() {
+  const cx = pac.x*TILE+TILE/2;
+  const cy = pac.y*TILE+TILE/2;
+  let angle = 0;
+  if (pac.dir.x < 0) angle = Math.PI;
+  else if (pac.dir.y < 0) angle = -Math.PI/2;
+  else if (pac.dir.y > 0) angle = Math.PI/2;
+
+  const mouth = 0.22 + Math.abs(Math.sin(pac.mouth))*0.22;
+  ctx.fillStyle = "#ffd900";
+  ctx.beginPath();
+  ctx.moveTo(cx,cy);
+  ctx.arc(cx,cy,8.5,angle+mouth,angle+Math.PI*2-mouth);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawGhost(g) {
+  const cx = g.x*TILE+TILE/2;
+  const cy = g.y*TILE+TILE/2;
+  ctx.fillStyle = g.color;
+  ctx.beginPath();
+  ctx.arc(cx,cy-1,8,Math.PI,0);
+  ctx.lineTo(cx+8,cy+8);
+  ctx.lineTo(cx+4,cy+5);
+  ctx.lineTo(cx,cy+8);
+  ctx.lineTo(cx-4,cy+5);
+  ctx.lineTo(cx-8,cy+8);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = "#fff";
+  ctx.beginPath();
+  ctx.arc(cx-3,cy-2,2.6,0,Math.PI*2);
+  ctx.arc(cx+3,cy-2,2.6,0,Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = "#1734a8";
+  ctx.beginPath();
+  ctx.arc(cx-3,cy-2,1.2,0,Math.PI*2);
+  ctx.arc(cx+3,cy-2,1.2,0,Math.PI*2);
+  ctx.fill();
+}
+
+function drawOverlay() {
+  if (!gameOver) return;
+  ctx.fillStyle = "rgba(0,0,0,.72)";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.textAlign = "center";
+  ctx.fillStyle = win ? "#ffd900" : "#fff";
+  ctx.font = "bold 38px Arial";
+  ctx.fillText(win ? "YOU WIN!" : "GAME OVER", canvas.width/2, canvas.height/2-20);
+  ctx.fillStyle = "#fff";
+  ctx.font = "18px Arial";
+  ctx.fillText("按「重新開始」再玩一次", canvas.width/2, canvas.height/2+25);
+}
+
+function draw() {
+  drawMaze();
+  drawPac();
+  ghosts.forEach(drawGhost);
+  drawOverlay();
+}
+
+function update(time) {
+  if (!lastTime) lastTime = time;
+  accumulator += time-lastTime;
+  lastTime = time;
+
+  while (accumulator >= STEP && !gameOver) {
+    pac.mouth += 0.5;
+    movePac();
+    ghostTick++;
+    if (ghostTick % GHOST_MOVE_EVERY === 0) {
+      moveGhosts();
+      collisionCheck();
+    }
+    accumulator -= STEP;
+  }
+  draw();
+  requestAnimationFrame(update);
+}
+
+function restart() {
+  // 重新建立地圖
+  const fresh = MAP.map(row => row.padEnd(cols, " ").slice(0, cols).split(""));
+  for (let y=0;y<rows;y++) for (let x=0;x<cols;x++) grid[y][x]=fresh[y][x];
+  score=0; lives=3; gameOver=false; win=false; ghostTick=0;
+  scoreEl.textContent=score;
+  livesEl.textContent=lives;
+  resetPositions();
+}
+
+window.addEventListener("keydown", e => {
+  const keys = {
+    ArrowUp:{x:0,y:-1}, ArrowDown:{x:0,y:1},
+    ArrowLeft:{x:-1,y:0}, ArrowRight:{x:1,y:0}
+  };
+  if (keys[e.key]) {
+    e.preventDefault();
+    pac.next = keys[e.key];
+  }
+});
+restartBtn.addEventListener("click", restart);
+
+resetPositions();
+requestAnimationFrame(update);
+</script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>吃豆人 Pac-Man</title>
+  <link rel="stylesheet" href="./css/style.css">
+</head>
+<body>
+  <div class="game-wrap">
+    <h1>● PAC-MAN ●</h1>
+    <div class="hud">
+      <span>分數：<b id="score">0</b></span>
+      <span>生命：<b id="lives">3</b></span>
+    </div>
+    <canvas id="game" width="560" height="620"></canvas>
+    <div class="hint">使用 ↑ ↓ ← → 控制吃豆人，吃掉所有豆子即可過關！</div>
+    <button id="restart">重新開始</button>
+  </div>
+
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>
